@@ -8,9 +8,9 @@ editor: visual
 
 2\. What is the average degree in the network? And the standard deviation of the degree?
 
-3. Plot the degree distribution in linear-linear scale and in log-log-scale. What is the degree of the most connected node?
+3.  Plot the degree distribution in linear-linear scale and in log-log-scale. What is the degree of the most connected node?
 
-4. What is the clustering coefficient (transitivity) in the network?
+4.  What is the clustering coefficient (transitivity) in the network?
 
 5\. What is the assortativity (degree) in the network?
 
@@ -18,7 +18,7 @@ editor: visual
 
 7\. Test that the clustering coefficient in the network cannot be statistically explained by a configuration model in which the nodes have the same degree as the original.
 
-8. Visualize the neighborhood of the node with the largest centrality (closeness)
+8.  Visualize the neighborhood of the node with the largest centrality (closeness)
 
 ```{r}
 library(tidyverse)
@@ -28,7 +28,10 @@ library(jsonlite)
 library(visNetwork)
 library(widgetframe)
 library(ggthemes)
+library(ggraph)
 ```
+
+### Data wrangling
 
 ```{r}
 data <-read.csv("migration_data.csv")
@@ -53,6 +56,13 @@ data <- data |>
          y1980 = as.numeric(y1980),
          y1990 = as.numeric(y1990),
          y2000 = as.numeric(y2000)) |> 
+  group_by(cntr_origin, cntr_dest) |> 
+  mutate(y1960 = sum(y1960),
+         y1970 = sum(y1970),
+         y1980 = sum(y1980),
+         y1990 = sum(y1990),
+         y2000 = sum(y2000)) |> 
+  ungroup() |> 
   left_join(continents, by = c("cntr_origin_code" = "alpha.3")) |> 
   rename(sub_region_origin = sub.region,
          region_origin = region) |> 
@@ -73,105 +83,328 @@ pop_data <- pop_data |>
 ```
 
 ```{r}
-head(V(g))
-V(gSW)[1]
-which(V(g)=="AFG")
-which(V(g)$name=="AFG")
 
-head(V(g)[.nei("AFG")])
-head(V(g)[.nei("CAN")])
+data_func <- function(years){
+  
+ data_year <- data |> 
+  select(cntr_origin, cntr_dest, years) |> 
+  filter(!!sym(years) > 0)
+  
+  }
 
-head(neighbors(g,"AFG")) #get the int. ids of a node’s neighbor
-head(neighbors(g,"CAN")) #get the int. ids of a node’s neighbor
-head(incident(g,"AFG")) #get the incident edges to a node
+# List to store data frames for different years
+data_frames <- list()
+
+# Loop over different years
+years <- c("y1960", "y1970", "y1980", "y1990", "y2000") 
+for (year in years) {
+  data_frames[[paste0("data_", year)]] <- data_func(year)
+  
+}
+
+
+node_func <- function(data){
+  
+  nodes <- data |> 
+  select(cntr_origin) |> 
+  distinct(cntr_origin)
+  
+  g <- graph_from_data_frame(data, vertices=nodes, directed = TRUE)
+  
+  
+}
+
+
+nodes <- list()
+
+
+for (i in seq_along(data_frames)) {
+  nodes[[paste0("nodes_", names(data_frames)[i])]] <- node_func(data = data_frames[[i]])
+}
+
+
+g1960 <- nodes[["nodes_data_y1960"]]
+g1970 <- nodes[["nodes_data_y1970"]]
+g1980 <- nodes[["nodes_data_y1980"]]
+g1990 <- nodes[["nodes_data_y1990"]]
+g2000 <- nodes[["nodes_data_y2000"]]
 ```
+
+### 1. The number of nodes and links
 
 ```{r}
 
-# Create edge list
-edges_1960_un <- data |> 
-  drop_na() |> 
-  group_by(cntr_origin_code, cntr_dest_code) |> 
-  mutate(total_1960 = sum(y1960)) |> 
-  ungroup() |> 
-  group_by(cntr_dest_code) |> 
-  mutate(immigration = sum(total_1960)) |> 
-  ungroup() |> 
-  group_by(cntr_origin_code) |> 
-  mutate(emigration = sum(total_1960)) |> 
-  ungroup() |> 
-  distinct(cntr_origin_code, cntr_dest_code, total_1960, immigration, emigration, .keep_all = TRUE) |> 
-  select(cntr_dest_code, cntr_origin_code,  immigration, emigration, total_1960)
-
-edges_1960 <-edges_1960_un |> 
-filter(total_1960 > 5000) 
-
-nodes <- data |> 
-  select(cntr_origin_code) |> 
-  distinct(cntr_origin_code)
-
-
-
-g <- graph_from_data_frame(edges_1960,vertices=nodes, directed = TRUE)
-
-g <- simplify(g,remove.multiple = T,remove.loops = T)
-
-
-
-par(mar=c(0,0,0,0))
-
-# Remove unconnected nodes from the graph
-unconnected_nodes <- V(g)[degree(g, mode = "all") == 0]
-g <- delete_vertices(g, unconnected_nodes)
-
-
-normalized_values <- scales::rescale( degree(g), to = c(1, 15))
-
-V(g)$vertex_degree <- normalized_values
-
-emigration <-edges_1960_un |> 
-  distinct(cntr_origin_code, emigration)  
+num_nodes_edges <- function(g, years){
   
+num_nodes <- vcount(g)
+num_edges <- ecount(g)
 
-immigration <- edges_1960_un |> 
-  distinct(cntr_dest_code, immigration)
+print(paste0("In the network of ", years))
+print(paste0("The number of nodes are ", num_nodes))
+print(paste0("The number of edges are ", num_edges))
 
-node_names <- vertex_attr(g, "name")
+}
+
+for (i in seq_along(nodes)){
+  
+  num_nodes_edges(g = nodes[[i]], years = years[i])
+    
+}
+```
+
+### 2. Degree
+
+The number of connections
+
+-   *What is the average degree in the network? And the standard deviation of the degree?*
+
+-   *Plot the degree distribution in linear-linear scale and in log-log-scale.*
+
+-   *What is the degree of the most connected node?*
+
+<!-- -->
+
+-   **`"all"`**: Computes the total degree of each vertex, which is the sum of its in-degree and out-degree.
+
+```{r}
+
+degree_sd_func <- function(g, years){
+  
+degrees <- degree(g, mode = "all")
+avg_degree <- mean(degrees)
+degree_sd <- sd(degrees)
+
+max_degree_index <- which.max(degrees)
+
+node_name <- V(g)$name[max_degree_index]
+
+max_degree <- degrees[max_degree_index]
 
 
-net_migration <- emigration |> 
-  left_join(immigration, by = c("cntr_origin_code" = "cntr_dest_code")) |> 
- mutate(immigration = ifelse(is.na(immigration), 0, immigration)) |> 
-  mutate(net_migration = (immigration - emigration)) |> 
-  filter(cntr_origin_code %in% node_names)
+p <-ggplot() + 
+  geom_histogram(aes(x=degree(g,mode="all"))) + 
+  labs(x="Degree",y="Density")+
+  ggtitle(paste("Degree Distribution of", years))+
+  annotate("text", x = 900, y = 20, 
+           label = paste("Average Degree:", round(avg_degree, 2)), 
+           size = 4) +
+  annotate("text", x = 900, y = 18, 
+             label = paste("Degree SD:", round(degree_sd, 2)), 
+             size = 4)+
+  annotate("text", x = 900, y = 16, 
+           label = paste("Maximum degree:", round(max_degree, 2)),
+            size = 4)+
+  annotate("text", x = 900, y = 14, 
+            label = paste("Node: ", node_name), 
+            size = 4)
 
-net_migration_c <- if_else(net_migration$net_migration > 0, "#AFE1AF", "#FF5733")
-V(g)$colour <- net_migration_c
+print(p)
 
-# Generate an initial layout using the Kamada-Kawai algorithm
-initial_layout <- layout_with_kk(g)
+plog <- ggplot() + 
+  geom_histogram(aes(x = degree(g, mode = "all")), bins = 30) + 
+  scale_x_continuous(trans = "log10", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  scale_y_continuous(trans = "log10", breaks = c(0.1, 1, 10, 100)) +
+  labs(x = "Degree (log)", y = "Density (log)") +
+  ggtitle(paste("Degree Distribution of", years, "in a log-log-scale"))
 
-# Increase node separation manually
-adjusted_layout <- initial_layout * 10
+print(plog)
 
-plot(g,
-     size=degree(g),
-     vertex.size = V(g)$vertex_degree,
-     vertex.color = V(g)$colour,
-     vertex.frame.color = V(g)$colour,
-     layout = adjusted_layout,
-     vertex.size = 2,
-     vertex.label.cex = 0.8,
-     vertex.label.color="black",
+}
+
+
+for (i in seq_along(nodes)){
+  
+    degree_sd_func(g = nodes[[i]], years = years[i])
+    
+}
+
+
+```
+
+### 3. Assortativity
+
+High degree nodes connect to other high degree nodes
+
+Assortativity coefficient: Pearson correlation between the degrees of connected nodes
+
+-   *What is the assortativity (degree) in the network?*
+
+```{r}
+
+assortativity_func <- function(g, years){
+  
+ assort <- assortativity_degree(g) 
+ print(paste0("The assortativity of network ", years, " is ", assort))
+
+}
+
+for (i in seq_along(nodes)){
+  
+    transitivity_func(g = nodes[[i]], years = years[i])
+  }
+    
+```
+
+### 4. Transitivity
+
+Nodes tend to share mutual relationships, your friends are likely to be friends among themselves too.
+
+This 'clustering' is measured with the 'clustering coefficient' (or transitivity)
+
+-   *What is the clustering coefficient (transitivity) in the network?*
+
+```{r}
+
+transitivity_func <- function(g, years){
+  
+ trans <- transitivity(g, weights = E(g)$Value ) 
+ 
+ print(paste0("The transivity of network ", years, " is ", trans))
+
+}
+
+for (i in seq_along(nodes)){
+  
+    transitivity_func(g = nodes[[i]], years = years[i])
+    
+}
+
+```
+
+### 5. Community structure
+
+-   *Using the Louvain method, does the network have a community structure? If so, what is its modularity?*
+
+-   COMPARE WITH UNDIRECTED LOUVAIN AND FIX GRAPH
+
+FROM CHAT!! Modularity is a measure used in network analysis to evaluate the quality of community structure within a network. It quantifies the degree to which a network can be partitioned into distinct groups or communities based on the connections between nodes.
+
+In essence, modularity measures the extent to which the connections within communities are denser compared to connections between communities. A network with high modularity has dense connections within communities and sparse connections between communities, indicating clear and well-defined community structure.
+
+```{r}
+
+
+community_func <- function(g, years){
+  
+cw<-cluster_walktrap(g)
+cw_weight<-cluster_walktrap(g, weights =  E(g)$value)
+
+membership_cw <-membership(cw)
+membership_cw_weight <-membership(cw_weight)
+
+print(head(membership_cw))
+print(head(membership_cw_weight))
+
+size_cw <-sizes(cw)
+size_cw_weight <-sizes(cw_weight)
+
+print(size_cw)
+print(size_cw_weight)
+
+modularity_cw <-modularity(cw) #How good are the communities?
+modularity_cw_weight<-modularity(cw_weight)
+
+print(modularity_cw)
+print(modularity_cw_weight)
+
+par(mfrow=c(1,2))  
+ll <- layout.kamada.kawai(g)
+
+plot(cw,
+     g, 
+     layout=ll,
+     vertex.label="",
+     vertex.size = 10,
      edge.width = 0.5,
-     edge.arrow.size = 0.01, asp = 0,
-     edge.curved = T,
-     vertex.label.family = "mono",
-     asp = 0.8)
+     edge.arrow.size = 0.01,
+     main = paste0("Unweighted network:", years))
+
+plot(cw_weight,
+     g,
+     layout=ll,
+     vertex.label="",
+     vertex.size = 10,
+     edge.width = 0.5,
+     edge.arrow.size = 0.01,
+     main = paste0("Weighted network:", years))
+}
+
+for (i in seq_along(nodes)){
+  
+    community_func(g = nodes[[i]], years = years[i])
+}
+    
+
+```
+
+```{r}
+cw<-cluster_walktrap(g1970)
+cw_weight<-cluster_walktrap(g1970, weights =  E(g1970)$Value)
+
+membership_cw <-membership(cw)
+membership_cw_weight <-membership(cw_weight)
+
+print(head(membership_cw))
+print(head(membership_cw_weight))
+
+size_cw <-sizes(cw)
+size_cw_weight <-sizes(cw_weight)
 
 
+print(size_cw)
+print(size_cw_weight)
 
+modularity_cw <-modularity(cw) #How good are the communities?
+modularity_cw_weight<-modularity(cw_weight)
 
+print(modularity_cw)
+print(modularity_cw_weight)
+
+par(mfrow=c(1,2))  
+ll <- layout.kamada.kawai(g1960)
+
+plot(cw,
+     g1960, 
+     layout=ll,
+     vertex.label="",
+     vertex.size = 10,
+     edge.width = 0.5,
+     edge.arrow.size = 0.01,
+     main = paste0("Unweighted network:", years))
+
+plot(cw_weight,
+     g1960,
+     layout=ll,
+     vertex.label="",
+     vertex.size = 10,
+     edge.width = 0.5,
+     edge.arrow.size = 0.01,
+     main = paste0("Weighted network:", years))
+```
+
+-   *Test that the clustering coefficient in the network cannot be statistically explained by a configuration model in which the nodes have the same degree as the original.*
+
+```{r}
+
+transitivity(g1960)
+transitivity(sample_degseq(degree(g1960)))
+
+#Generate the distribution of clustering values from the degree-sequence models with the same degree sequence as the original network.
+trans_model <- replicate(1000,transitivity(sample_degseq(degree(g1960))))
+
+#Compare the actual value from the enron network with the distribution of values from the degree-sequence model
+ggplot() + geom_density(aes(x=trans_model)) +
+  geom_vline(xintercept = transitivity(g1960),linetype=2)
+
+#Assuming the distribution for the degree-sequence is Gaussian, then the p-value of our hypothesis is
+dnorm(transitivity(g1960),mean=mean(trans_model),sd=sd(trans_model))
+```
+
+### Visualisation
+
+-   *Visualize the neighborhood of the node with the largest centrality (closeness)*
+
+```{r}
 
 ```
 
@@ -255,7 +488,6 @@ plot(g,
      vertex.color = V(g)$colour,
      vertex.frame.color = V(g)$colour,
      layout = adjusted_layout,
-     vertex.size = 2,
      vertex.label.cex = 0.8,
      vertex.label.color="black",
      edge.width = 0.5,
