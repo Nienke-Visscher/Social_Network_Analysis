@@ -103,14 +103,14 @@ for (year in years) {
 }
 
 
-node_func <- function(data){
+node_func <- function(data, years){
   
   nodes <- data |> 
   select(cntr_origin) |> 
   distinct(cntr_origin)
   
   g <- graph_from_data_frame(data, vertices=nodes, directed = TRUE)
-  
+  g <- set_edge_attr(g, "weight", value= data_frames[[i]][[years]])
   
 }
 
@@ -119,15 +119,19 @@ nodes <- list()
 
 
 for (i in seq_along(data_frames)) {
-  nodes[[paste0("nodes_", names(data_frames)[i])]] <- node_func(data = data_frames[[i]])
+  nodes[[paste0("nodes_", names(data_frames)[i])]] <- node_func(data = data_frames[[i]], years = years[i])
 }
 
 
+
 g1960 <- nodes[["nodes_data_y1960"]]
-g1970 <- nodes[["nodes_data_y1970"]]
-g1980 <- nodes[["nodes_data_y1980"]]
-g1990 <- nodes[["nodes_data_y1990"]]
-g2000 <- nodes[["nodes_data_y2000"]]
+is_weighted(g1960)
+E(g1960)$weight
+
+```
+
+```{r}
+
 ```
 
 ### 1. The number of nodes and links
@@ -173,6 +177,7 @@ degree_sd_func <- function(g, years){
 degrees <- degree(g, mode = "all")
 avg_degree <- mean(degrees)
 degree_sd <- sd(degrees)
+
 
 max_degree_index <- which.max(degrees)
 
@@ -240,7 +245,7 @@ assortativity_func <- function(g, years){
 
 for (i in seq_along(nodes)){
   
-    transitivity_func(g = nodes[[i]], years = years[i])
+    assortativity_func (g = nodes[[i]], years = years[i])
   }
     
 ```
@@ -257,9 +262,9 @@ This 'clustering' is measured with the 'clustering coefficient' (or transitivity
 
 transitivity_func <- function(g, years){
   
- trans <- transitivity(g, weights = E(g)$Value ) 
+ trans <- transitivity(g, weights = E(g)$weight) 
  
- print(paste0("The transivity of network ", years, " is ", trans))
+ print(paste0("The transivity of network ", years, " is ", round(trans, 4)))
 
 }
 
@@ -268,6 +273,9 @@ for (i in seq_along(nodes)){
     transitivity_func(g = nodes[[i]], years = years[i])
     
 }
+
+
+
 
 ```
 
@@ -286,8 +294,8 @@ In essence, modularity measures the extent to which the connections within commu
 
 community_func <- function(g, years){
   
-cw<-cluster_walktrap(g)
-cw_weight<-cluster_walktrap(g, weights =  E(g)$value)
+cw<-cluster_walktrap(g, weights = NULL)
+cw_weight<-cluster_walktrap(g, weights = E(g)$weight)
 
 membership_cw <-membership(cw)
 membership_cw_weight <-membership(cw_weight)
@@ -337,67 +345,44 @@ for (i in seq_along(nodes)){
 
 ```
 
-```{r}
-cw<-cluster_walktrap(g1970)
-cw_weight<-cluster_walktrap(g1970, weights =  E(g1970)$Value)
-
-membership_cw <-membership(cw)
-membership_cw_weight <-membership(cw_weight)
-
-print(head(membership_cw))
-print(head(membership_cw_weight))
-
-size_cw <-sizes(cw)
-size_cw_weight <-sizes(cw_weight)
-
-
-print(size_cw)
-print(size_cw_weight)
-
-modularity_cw <-modularity(cw) #How good are the communities?
-modularity_cw_weight<-modularity(cw_weight)
-
-print(modularity_cw)
-print(modularity_cw_weight)
-
-par(mfrow=c(1,2))  
-ll <- layout.kamada.kawai(g1960)
-
-plot(cw,
-     g1960, 
-     layout=ll,
-     vertex.label="",
-     vertex.size = 10,
-     edge.width = 0.5,
-     edge.arrow.size = 0.01,
-     main = paste0("Unweighted network:", years))
-
-plot(cw_weight,
-     g1960,
-     layout=ll,
-     vertex.label="",
-     vertex.size = 10,
-     edge.width = 0.5,
-     edge.arrow.size = 0.01,
-     main = paste0("Weighted network:", years))
-```
-
 -   *Test that the clustering coefficient in the network cannot be statistically explained by a configuration model in which the nodes have the same degree as the original.*
 
 ```{r}
+config_func <- function(g, years){
+  
+trans <- transitivity(g)
+trans_config <- transitivity(sample_degseq(degree(g)))
 
-transitivity(g1960)
-transitivity(sample_degseq(degree(g1960)))
+print(paste0("The transitivity of network ", years, " is ", round(trans, 4)))
+print(paste0("The transitivity of configuration network is ", round(trans_config,4)))
 
 #Generate the distribution of clustering values from the degree-sequence models with the same degree sequence as the original network.
-trans_model <- replicate(1000,transitivity(sample_degseq(degree(g1960))))
+trans_model <- replicate(1000,transitivity(sample_degseq(degree(g))))
+ 
+#Compare the actual value from the original network with the distribution of values from the degree-sequence model
+p <-ggplot() + 
+  geom_density(aes(x=trans_model)) +
+  geom_vline(xintercept = transitivity(g),linetype=2)+
+  ggtitle (paste0("The transitivity of the network ", years, " compared to the configuration network"))
 
-#Compare the actual value from the enron network with the distribution of values from the degree-sequence model
-ggplot() + geom_density(aes(x=trans_model)) +
-  geom_vline(xintercept = transitivity(g1960),linetype=2)
+print(p)
 
 #Assuming the distribution for the degree-sequence is Gaussian, then the p-value of our hypothesis is
-dnorm(transitivity(g1960),mean=mean(trans_model),sd=sd(trans_model))
+dnorm<- dnorm(transitivity(g),mean=mean(trans_model),sd=sd(trans_model))  
+
+print(paste0("For the network ", years, " The p-value of the H0 is ", dnorm))
+  
+}
+
+for (i in seq_along(nodes)){
+  
+    config_func(g = nodes[[i]], years = years[i])
+}
+    
+
+
+
+
 ```
 
 ### Visualisation
@@ -405,7 +390,122 @@ dnorm(transitivity(g1960),mean=mean(trans_model),sd=sd(trans_model))
 -   *Visualize the neighborhood of the node with the largest centrality (closeness)*
 
 ```{r}
+highest_closeness_func <- function(g, year) {
+  
+ 
+  
+  edges_un <- data |> 
+  drop_na() |> 
+  group_by(cntr_dest) |> 
+    mutate(immigration = sum(!!sym(year))) |> 
+    ungroup() |> 
+    group_by(cntr_origin) |> 
+    mutate(emigration = sum(!!sym(year))) |> 
+    ungroup() |> 
+    distinct(cntr_origin, cntr_dest,!!sym(year), immigration, emigration, .keep_all = TRUE) |> 
+    select(cntr_origin, cntr_dest,!!sym(year), immigration, emigration)
+  
+  closeness_values <- closeness(g, mode = "all")  
+  
+ max_closeness_node<- names(which.max(closeness_values))  
 
+
+  
+  edges <-edges_un |> 
+   filter(!!sym(year) > 1500) |> 
+   filter(cntr_origin == max_closeness_node)
+  
+  nodes <- data |> 
+  select(cntr_dest) |> 
+  distinct(cntr_dest)
+  
+
+
+
+
+g <- graph_from_data_frame(edges,vertices=nodes, directed = TRUE)
+
+
+#g <- simplify(g,remove.multiple = T,remove.loops = T)
+
+
+
+par(mar=c(0,0,0,0))
+
+# Remove unconnected nodes from the graph
+unconnected_nodes <- V(g)[degree(g, mode = "all") == 0]
+g <- delete_vertices(g, unconnected_nodes)
+
+
+normalized_values <- scales::rescale( degree(g), to = c(1, 15))
+
+V(g)$vertex_degree <- normalized_values
+
+emigration <-edges_un |> 
+  distinct(cntr_origin, emigration) 
+
+  
+
+immigration <- edges_un |> 
+  distinct(cntr_dest, immigration)
+
+
+node_names <- vertex_attr(g, "name")
+
+
+
+net_migration <- emigration |> 
+left_join(immigration, by = c("cntr_origin" = "cntr_dest"))|> 
+ mutate(immigration = ifelse(is.na(immigration), 0, immigration)) |> 
+  mutate(net_migration = (immigration - emigration)) |> 
+  filter(cntr_origin %in% node_names)
+
+net_migration_c <- if_else(net_migration$net_migration > 0, "#AFE1AF", "#FF5733")
+V(g)$colour <- net_migration_c
+
+print(E(g)$Weight)
+
+# Generate an initial layout using the Kamada-Kawai algorithm
+initial_layout <- layout_with_kk(g)
+
+# Increase node separation manually
+adjusted_layout <- initial_layout * 10
+
+plot(g,
+     size=degree(g),
+     vertex.size = V(g)$vertex_degree,
+     vertex.color = V(g)$colour,
+     vertex.frame.color = V(g)$colour,
+     layout = adjusted_layout,
+     vertex.label.cex = 0.8,
+     vertex.label.color="black",
+     edge.width =E(g)$Weight,
+     edge.arrow.size = 0.01, asp = 0,
+     vertex.label.family = "mono",
+     asp = 0.8)
+
+}
+  
+
+
+
+year <- c("y1960", "y1970", "y1980", "y1990", "y2000")
+
+for (i in seq_along(nodes)){
+  
+    highest_closeness_func(g = nodes[[i]], year = year[i])
+}
+    
+
+```
+
+```{r}
+emigration_edge <-edges |>
+  distinct(cntr_origin, cntr_dest, emigration) 
+  
+edge_width <- scales::rescale(emigration_edge$emigration, to = c(0.5, 5))
+print(edge_width)
+E(g)$edge_width <- edge_width
 ```
 
 ```{r}
@@ -432,71 +532,8 @@ network_func <- function(origin, destination, year){
 edges <-edges_un |> 
 filter(total > 5000) 
 
-nodes <- data |> 
-  select(!!sym(origin)) |> 
-  distinct(!!sym(origin))
 
 
-
-g <- graph_from_data_frame(edges,vertices=nodes, directed = TRUE)
-
-g <- simplify(g,remove.multiple = T,remove.loops = T)
-
-
-
-par(mar=c(0,0,0,0))
-
-# Remove unconnected nodes from the graph
-unconnected_nodes <- V(g)[degree(g, mode = "all") == 0]
-g <- delete_vertices(g, unconnected_nodes)
-
-
-normalized_values <- scales::rescale( degree(g), to = c(1, 15))
-
-V(g)$vertex_degree <- normalized_values
-
-emigration <-edges_un |> 
-  distinct(!!sym(origin), emigration)  
-  
-
-immigration <- edges_un |> 
-  distinct(!!sym(destination), immigration)
-
-
-
-node_names <- vertex_attr(g, "name")
-
-
-net_migration <- emigration |> 
-left_join(immigration, by = setNames(destination, origin))|> 
- mutate(immigration = ifelse(is.na(immigration), 0, immigration)) |> 
-  mutate(net_migration = (immigration - emigration)) |> 
-  filter(!!sym(origin) %in% node_names)
-
-net_migration_c <- if_else(net_migration$net_migration > 0, "#AFE1AF", "#FF5733")
-V(g)$colour <- net_migration_c
-
-# Generate an initial layout using the Kamada-Kawai algorithm
-initial_layout <- layout_with_kk(g)
-
-# Increase node separation manually
-adjusted_layout <- initial_layout * 10
-
-plot(g,
-     size=degree(g),
-     vertex.size = V(g)$vertex_degree,
-     vertex.color = V(g)$colour,
-     vertex.frame.color = V(g)$colour,
-     layout = adjusted_layout,
-     vertex.label.cex = 0.8,
-     vertex.label.color="black",
-     edge.width = 0.5,
-     edge.arrow.size = 0.01, asp = 0,
-     edge.curved = T,
-     vertex.label.family = "mono",
-     asp = 0.8)
-
-}
 
 
 
