@@ -1,0 +1,312 @@
+---
+title: "homework_2_RN_Visscher"
+format: html
+editor: visual
+---
+
+## Assignment
+
+-   Delete a fraction of real edges in the network and create a table of those links deleted (positive class) and of links non-present (negative class)
+
+-   Generate a number of proximity/similarity metrics heuristics for each link in the positive and negative class
+
+-   Train a binary classifier to predict the links, i.e., to predict the class (positive/negative) using those heuristics. Use crossvalidation.
+
+-   Evaluate the precision of the model. Which heuristic is the most important. Why do you think it is the most important?
+
+-   Comment on potential ways to improve the link prediction
+
+## Libraries
+
+```{r}
+#| warning: false
+#| output: false
+
+
+library(tidyverse)
+library(igraph)
+library(igraphdata)
+library(jsonlite)
+library(visNetwork)
+library(widgetframe)
+library(ggthemes)
+library(ggraph)
+```
+
+## Data
+
+In the following section, the data is wangled to make it suitable for the analytic objective of this assignment. First., the variable names are recoded to improve interpretability. Then the variable y2000, which contains the number of migrants between a certain set of countries for the year 2000 is transformed into a numeric variable and a sub selection of variables is made. Then the data further reduced to only keep the columns will be will be loaded into an igraph object later and rows with a number of migrants of 0 are deleted. Hereafter, a nodeslist is created and an igraph object using the command 'graph_from_data_frame()' is computed and is consequently weighted using the 'set_edge_att()' command
+
+```{r}
+#| warning: false
+
+
+data <-read.csv("migration_data.csv")
+
+
+data <- data |> 
+  rename(cntr_origin = Country.Origin.Name,
+         cntr_origin_code = Country.Origin.Code,
+         gender = Migration.by.Gender.Name,
+         gender_code = Migration.by.Gender.Code,
+         cntr_dest = Country.Dest.Name,
+         cntr_dest_code = Country.Dest.Code,
+         "y2000" = X2000..2000.) |> 
+  mutate(y2000 = as.numeric(y2000)) |> 
+  group_by(cntr_origin, cntr_dest) |> 
+  mutate(y2000 = sum(y2000)) |> 
+  select(cntr_origin,  cntr_origin_code, gender, gender_code, cntr_dest, cntr_dest_code, y2000) |> 
+  ungroup() 
+
+data_red <- data |> 
+  select(cntr_origin, cntr_dest, y2000) |> 
+  filter(y2000 > 0)
+
+nodes <- data_red |> 
+  select(cntr_origin) |> 
+  distinct(cntr_origin)
+
+nodes <- as.list(nodes)
+
+
+  #Create an igraph object
+  g <- graph_from_data_frame(data_red, vertices=nodes, directed = TRUE)
+  
+  #Weight the network by adding a weight attribute based on the migration flow
+  g <- set_edge_attr(g, "weight", value= data_red$y2000)
+  
+  is_weighted(g)
+  
+  g <- simplify(g)
+  
+num_nodes <- vcount(g)
+num_edges <- ecount(g)
+
+print(paste0("The number of nodes are ", num_nodes))
+print(paste0("The number of edges are ", num_edges))
+```
+
+### 1. Delete a fraction of real edges in the network and create a table of those links deleted (positive class) and of links non-present (negative class)
+
+In this chunk, a random selection of 5000 links is deleted from the networks and will hence be the *positive class.* An igraph object is computed without the deleted edges using the function 'delete_edges()' named *gp* and the true edges are stored in the variable *true edges.*
+
+```{r}
+set.seed(123)
+
+#We delete n=5000 edges from g. Those are going to be our positive class
+nlinks <- 5000 #sample 5000 links at random
+ii <- sample(1:ecount(g),nlinks)
+gp <- delete_edges(g,ii) #g prime, does not know the missing edges 
+
+true_edges <- data.frame(get.edges(g,ii)) #getting the true edges 
+```
+
+Now, the an edge list with false edges is created. That is, an edge list of 5000 non existing edges is computed from nodes with a degree larger then 10. If the sampled nodes are not connected, a false edge between them is established and saved in the data frame *false_edges.* These false edges are used to investigate how well our heuristics perform, that is, how well they predict the deleted edges in comparison to the non-existing edges.
+
+```{r}
+set.seed(123)
+false_edges <- data.frame() #create false edges
+most_connected <- which(degree(g)>10) #Select nodes with a degree higher then 20
+for(i in 1:nlinks){
+  i1 <- sample(most_connected,1)
+  i2 <- sample(most_connected,1)
+  if(!are_adjacent(g,i1,i2)) false_edges <- rbind(false_edges,data.frame(X1=i1,X2=i2)) #if there are not connect -> sample, add to false edges 
+}
+```
+
+In the following chunk a data frame named *total_edges* is computed containing both the true as well as the false edges. The true edges are coded 1 and the false edges are coded 0. Finally the column named are named *id1* containing a numeric id for the country of origin, *id2* containing a numeric id for the destination country and obs for indicating whether the edge is a true (=1) or false (=0) edge.
+
+```{r}
+true_edges <- data.frame(true_edges,obs=1) #true edges label 1
+false_edges <- data.frame(false_edges,obs=0) #false edges label 0
+
+# Create dataframe (i1, i2, obs(will be 0s and 1s))
+total_edges <- rbind(true_edges,false_edges) 
+
+#Label the collumns
+colnames(total_edges) <- c("id1","id2","obs")
+
+```
+
+### 2. Generate a number of proximity/similarity metrics heuristics for each link in the positive and negative class
+
+First, the neighbourhood is calculated for both sides of the edge: id1 and id2
+
+```{r}
+n1 <- neighborhood(gp,order=1,nodes=total_edges$id1)
+n2 <- neighborhood(gp,order=1,nodes=total_edges$id2)
+```
+
+In this chunk the heuristics *Jacard Similarity, Ademic Adar* and *Preferential Attachments* are computed and added to the *total_edges* data frame. The *Jacard Similarity* is based on the notion that if nodes with high connectivity most probably share some neighbours. For the Jacar coefficient these common neighbours are taken as a fraction of the total number of neighbours. The *Ademic Adar* heuristic is similar to the number of common neighbours but is in this case each neighbour is weighted inversely proportional to that degree. In other words, neighbours with little conncetions count more than neighbours with a high number of connections. This heuristic is relatable to the Dunbar number which states that the number of people with whom we can maintain a stable social relationship is not infinite due to our cognitive llimit. Based on this theory, one expect nodes with a small number of neighbours to have a stronger relationship with the neighbours it does have in comparison to nodes with many connections. The final heuristic: *Preferential Attachment* is based on the idea that two nodes with a high degree are more probable to connect.
+
+```{r}
+total_edges$sim_jacc <- 0 # jarcard similarity
+
+total_edges$sim_aa <- 0 #weights log neighbours degree -> Ademic Adar
+
+total_edges$sim_pref <- 0 #Preferential attachments
+
+for(i in 1:nrow(total_edges)){ #loop trough all edges
+  
+   common_neigh <- intersect(n1[[i]],n2[[i]])
+   
+   all_neigh <- union(n1[[i]],n2[[i]])
+   
+   degree_common_neigh <- degree(gp,common_neigh)
+   
+   total_edges$sim_jacc[i] <- length(common_neigh)/(length(all_neigh)-2) #Compute Jacard similarity, -2 to exclude x and y
+   
+   if(length(common_neigh)>0) total_edges$sim_aa[i] <- sum(1/log(degree_common_neigh)) #weighting the inverse of the degree, if(length(common_neigh)>0) -> if no common neighbours we skip
+   
+   total_edges$sim_pref[i] <- length(n1[[i]])*length(n2[[i]])# Preferential attachmnets
+}
+```
+
+In the boxplots below one can see that the heuristics seem to perform better in predicting the *true edges* then for the *false edges.*
+
+```{r}
+total_edges |> 
+  pivot_longer(c(sim_jacc,sim_aa,sim_pref)) |> 
+  ggplot(aes(x=as.factor(obs),y=value)) + 
+  geom_boxplot() + 
+  facet_wrap(~name,scales="free")
+```
+
+### 3. Train a binary classifier to predict the links, i.e., to predict the class (positive/negative) using those heuristics. Use crossvalidation.
+
+As the *true edges* are defined as 1 and the *false edges* as 0, a binary classification model can be applied to predict the positive and negative class. To do so, first the data frame *total_edges* is divided into training data (75%) and test data (15%) resulting in the data frames *total_edges_train* and *total_edges_test.*
+
+```{r}
+ii <- sample(1:nrow(total_edges),0.75*nrow(total_edges)) #75% for training 
+total_edges_train <- total_edges[ii,]
+total_edges_test <- total_edges[-ii,]
+```
+
+In the following chunk, a glm logistic regression model is trained using the three heuristics computed above and independent variables. All three heuristics seem to statistically significant in explaining the true edges.
+
+```{r,results='asis'}
+require(stargazer)
+glm_link <- glm(obs ~ sim_jacc+sim_aa+sim_pref,
+                data=total_edges_train,
+                family=binomial(link="logit"))# predict using the heuristics 
+
+stargazer(glm_link,type = "html",single.row = T,header=FALSE)
+
+summary(glm_link) #DELETE BEFORE COMPILING
+```
+
+Here, the probability for each link is computed using the test data
+
+```{r}
+set.seed(123)
+glm_prediction <- predict.glm(glm_link,total_edges_test,type="response") 
+```
+
+A 1 and thus a true edge is assigned when the probability is higher than 0.3. Note that the model seems to predict worse for false edges (372) then for true edges (33).
+
+```{r}
+pred <- sign(glm_prediction > 0.3) # if the probability is higher than 0.3, put 1
+table(pred,total_edges_test$obs,dnn=c("pred","obs"))
+```
+
+### 4. Evaluate the precision of the model. Which heuristic is the most important. Why do you think it is the most important?
+
+First, to evaluate the precision of the model, a confusion matrix using the Caret package is computed. The accuracy is 0.79 meaning that 79% of the cases the model was able to predict correctly. Also, sensitivity is 0.97 entailing that the model was able to predict 97% the true positive positive cases correctly whereas the specificity with 0.46 is much lower entailing that the model was only able to correctly predict the negative class in 46% of the cases of the true negative class. In other words, the confusion matrix shows that the model is much better at predicting the true edges compared to the false edges.
+
+```{r}
+require(caret)
+confusionMatrix(factor(pred),factor(total_edges_test$obs),positive = "1")
+```
+
+The chunk below computes the variable importance for each of the three heuristics and shows that the *Ademic Adar* heuristic is the most important one.
+
+```{r}
+varImp(glm_link)
+```
+
+However, one should note that all three heuristics are highly correlated. In other words, each heuristic only adds a limited extra explained variance to the model.
+
+```{r}
+require(corrplot)
+cc <- cor(total_edges_test[,c("sim_jacc","sim_aa","sim_pref")])
+corrplot(cc)
+```
+
+### 5. Comment on potential ways to improve the link prediction
+
+As the network showed to a have a community structure (see previous assignment), and can be added to the model for improvement. First the clusters for each node are computed and stored in a data frame. Then, this data frame is added to the *total_edges* data frames compiling into a new data frame names *total_edges_ad.* Within this data frame, a new variable: *cluster_simm,* is computed indicating whether the nodes are in the same cluster (=1) or not (=0).
+
+```{r}
+set.seed(123)
+#install.packages("blockmodels")
+#library(blockmodels)
+
+nodes <- total_edges|> 
+  select(id1) |> 
+  distinct(id1)
+
+nodes <- as.list(nodes)
+
+
+#Create an igraph object
+gn <- graph_from_data_frame(total_edges, vertices=nodes, directed = TRUE)
+
+#Create the clusters using the walktrap algorithm
+cw<-cluster_walktrap(gn)
+
+#Compute the membership for each node and store in a data frame
+membership_cw <-membership(cw)
+membership <-as.data.frame(membership_cw)
+membership <- tibble::rownames_to_column(membership) |> 
+  rename(country = rowname,
+         cluster = x) |> 
+  mutate(country = as.numeric(country))
+
+#Add the clusters to the total_edges data frame and compute and new variable indicating if nnodes are in the same cluster or not
+total_edges_ad <- total_edges |> 
+  left_join(membership, by = c("id1" = "country")) |> 
+  rename(cluster_origin = cluster) |> 
+  left_join(membership, by = c("id2" = "country")) |> 
+  rename(cluster_dest = cluster) |> 
+  mutate(cluster_simm = if_else(cluster_origin == cluster_dest, 1, 0))
+```
+
+The new data frame *total_edges_ad* is divided into test and train data. Then, the logistic model is again computed. The variable *cluster_simm* seems to make a statistically significant contribution to the model.
+
+```{r}
+ii <- sample(1:nrow(total_edges_ad),0.75*nrow(total_edges_ad)) #75% for training 
+total_edges_train <- total_edges_ad[ii,]
+total_edges_test <- total_edges_ad[-ii,]
+
+glm_link <- glm(obs ~ sim_jacc+sim_aa+sim_pref+cluster_simm,
+                data=total_edges_train,
+                family=binomial(link="logit"))# predict using the heuristics 
+
+#stargazer(glm_link,type = "html",single.row = T,header=FALSE)
+
+summary(glm_link) #DELETE BEFORE COMPILING
+
+```
+
+Again, the test data is used to predict and the confusion matrix is computed. Unfortunately, adding the clusters to the model does not improve the prediction-
+
+```{r}
+glm_prediction <- predict.glm(glm_link,total_edges_test,type="response") 
+
+pred <- sign(glm_prediction > 0.3) # if the probability is higher than 0.3, put 1
+
+
+require(caret)
+confusionMatrix(factor(pred),factor(total_edges_test$obs),positive = "1")
+
+
+```
+
+```{r}
+#install.packages("centiserve")
+library(centiserve)
+
+gn <- simplify(gn)
+
+katzcent(gn, alpha = 0.15)
+```
